@@ -20,6 +20,24 @@ struct DMXReceiver {
     end_channel: usize,
 }
 
+impl DMXReceiver {
+    fn is_affected(&self, channels: &Vec<usize>) -> bool {
+        channels
+            .iter()
+            .any(|c| self.start_channel <= *c && *c <= self.end_channel)
+    }
+}
+
+impl std::fmt::Debug for DMXReceiver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {}-{}",
+            self.proc, self.start_channel, self.end_channel
+        )
+    }
+}
+
 impl Clone for DMXReceiver {
     fn clone(&self) -> Self {
         Self {
@@ -33,39 +51,68 @@ impl Clone for DMXReceiver {
 
 struct Universe {
     receivers: Vec<DMXReceiver>,
+    last_frame: Vec<u8>,
 }
 
 impl Universe {
-    fn send(&self, data: &[u8]) {
+    fn send(&mut self, data: &Vec<u8>) {
         let cb_sender = callback_sender_by_id("stagehand".into()).unwrap();
-        let receivers = self.receivers.clone();
-        let channels: Vec<f32> = data.iter().map(|u| *u as f32).collect();
-        cb_sender
-            .send(Box::new(move || {
-                let data: Vec<Value> = channels.iter().map(|x| Value::from(*x)).collect();
-                let bruh: Vec<&Value> = data.iter().map(|v| v).collect();
-                for receiver in receivers.iter() {
-                    let target = unsafe { Value::from_raw(receiver.target) };
-                    target
-                        .call(
-                            &receiver.proc,
-                            &bruh[receiver.start_channel..=receiver.end_channel],
-                        )
-                        .unwrap();
-                }
-                Ok(Value::null())
-            }))
-            .unwrap();
+
+        let delta = self.get_changed_channels(data);
+        let mut receivers = self.receivers.clone();
+        receivers.retain(|r| r.is_affected(&delta));
+
+        if !receivers.is_empty() {
+            let channels: Vec<f32> = data.iter().map(|u| *u as f32).collect();
+            cb_sender
+                .send(Box::new(move || {
+                    let data: Vec<Value> = channels.iter().map(|x| Value::from(*x)).collect();
+                    let bruh: Vec<&Value> = data.iter().map(|v| v).collect();
+                    for receiver in receivers.iter() {
+                        let target = unsafe { Value::from_raw(receiver.target) };
+                        target
+                            .call(
+                                &receiver.proc,
+                                &bruh[receiver.start_channel..=receiver.end_channel],
+                            )
+                            .unwrap();
+                    }
+                    Ok(Value::null())
+                }))
+                .unwrap();
+        }
+
+        self.last_frame = data.clone();
     }
 
     fn add_receiver(&mut self, receiver: DMXReceiver) {
         self.receivers.push(receiver);
     }
+
+    fn get_changed_channels(&self, frame: &Vec<u8>) -> Vec<usize> {
+        if self.last_frame.is_empty() {
+            return (0..frame.len()).collect(); // If this is the first frame, we can assume all channels have been modified
+        }
+        let mut delta = Vec::with_capacity(16);
+        self.last_frame
+            .iter()
+            .zip(frame.iter())
+            .enumerate()
+            .for_each(|(i, (last, cur))| {
+                if *last != *cur {
+                    delta.push(i)
+                }
+            });
+        delta
+    }
 }
 
 impl Default for Universe {
     fn default() -> Self {
-        Self { receivers: vec![] }
+        Self {
+            receivers: vec![],
+            last_frame: vec![],
+        }
     }
 }
 
@@ -107,20 +154,8 @@ fn handle_messages() {
                 socket.send_to(&bytes, &addr).unwrap();
             }
             ArtCommand::Output(out) => {
-                /*let bleh = format!("{}, {:?}", out.port_address.0, out.data.inner);
-                callback_sender_by_id("stagehand".into())
-                    .unwrap()
-                    .send(Box::new(move || {
-                        Proc::find("/proc/print")
-                            .unwrap()
-                            .call(&[&Value::from_string(bleh.as_str()).unwrap()])
-                            .unwrap();
-                        Ok(Value::from(true))
-                    }))
-                    .unwrap();
-                */
                 let data = &out.data.inner;
-                if let Some(universe) = UNIVERSES.get(&out.port_address) {
+                if let Some(mut universe) = UNIVERSES.get_mut(&out.port_address) {
                     universe.send(data);
                 }
                 // No cache, lets put it in
@@ -175,15 +210,10 @@ fn dmx_register(
         raw_types::funcs::inc_ref_count(target);
     } // Please don't murder me willox
 
-    let proc = procpath.to_string()?;
-    let proc = proc.split("/").last().unwrap();
-    //let mut chars = proc.chars();
-    //chars.next();
-    //let proc = chars.as_str().to_owned();*/
-    let proc = proc.to_owned();
+    let proc = procpath.to_string()?.split("/").last().unwrap().to_owned();
 
     let universe = universe.as_number()? as u16;
-    let start_channel = start_channel.as_number()? as usize;
+    let start_channel = start_channel.as_number()? as usize - 1;
     let end_channel = start_channel + footprint.as_number()? as usize - 1;
 
     UNIVERSES
