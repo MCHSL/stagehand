@@ -1,0 +1,17 @@
+[package]
+name = "stagehand-dm"
+version = "0.1.0"
+authors = ["MCHSL <michal.sul@wp.pl>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+auxtools = { git = "https://github.com/willox/auxtools" }
+auxcallback = { git = "https://github.com/mchsl/auxcallback/" }
+artnet_protocol = { git = "https://github.com/MCHSL/artnet_protocol" }
+dashmap = "3.11.10"
+lazy_static = "1.4.0"
