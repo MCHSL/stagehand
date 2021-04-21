@@ -1,5 +1,5 @@
 [package]
-name = "stagehand-dm"
+name = "stagehand"
 version = "0.1.0"
 authors = ["MCHSL <michal.sul@wp.pl>"]
 edition = "2018"
